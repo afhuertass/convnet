@@ -10,26 +10,34 @@ import data_manager as dm
 from tensorflow.contrib import learn
 from tensorflow.contrib.metrics.python.ops import metric_ops
 from tensorflow.contrib.learn.python.learn import learn_runner
+
+from tensorflow.contrib.tfprof import model_analyzer  as model_analyzer
 import argparse
 
 import os
+import sys
 import json 
 import logging
 import tensorflow as tf
 
+from tensorflow import gfile
 tf.logging.set_verbosity(tf.logging.INFO)
 
 
 def make_experiment_fn( args ):
+    files = gfile.Glob( args.train_data_path[0] )
 
+    tf.logging.info("number of input files" + str(len(files)))
     train_input_fn = dm.make_input_fn(
-        args.train_data_path  ,
+        files  ,
         dm.parse_examples ,
         args.batch_size ,
         num_epochs = args.num_epochs
     )
+    files_eval = gfile.Glob(args.eval_data_path[0] )
+    tf.logging.info("number of input EVAL files" + str(len(files_eval)))
     eval_input_fn = dm.make_input_fn(
-        args.eval_data_path ,
+        files_eval  ,
         dm.parse_examples ,
         args.batch_size ,
         num_epochs = args.num_epochs
@@ -37,7 +45,9 @@ def make_experiment_fn( args ):
 
     def _experiment_fn( output_dir ):
         runconfig = learn.RunConfig(
-            gpu_memory_fraction = 0.6 
+            gpu_memory_fraction = 0.6 ,
+           
+            
         )
         estimator =  learn.Estimator(
             model_fn = cnn_maker.make_model( args.learning_rate) , 
@@ -50,7 +60,7 @@ def make_experiment_fn( args ):
             ,
             train_input_fn = train_input_fn ,
             eval_input_fn = eval_input_fn ,
-            train_steps = args.max_steps,
+            train_steps = args.num_epochs ,
             eval_metrics = cnn_maker.METRICS,  # AGREGAR METRICAS
             continuous_eval_throttle_secs = args.min_eval_seconds ,
             min_eval_frequency = args.min_train_eval_rate ,
@@ -77,8 +87,14 @@ def run_train( args ):
     trial = task_data.get('trial')
     if trial is not None:
         args.output_path = os.path.join( args.output_path , trial )
-    learn_runner.run( make_experiment_fn(args) , args.output_path   )
+
+    experiment = make_experiment_fn(args)
+   
     
+    tf.get_default_graph().finalize()
+        
+    learn_runner.run( experiment , output_dir=args.output_path   )
+    print("fuck you")
 
 def model_arguments(parser):
 
@@ -157,21 +173,64 @@ def training_arguments(parser):
     group.add_argument(
         '--min-eval-seconds' ,
         type = float ,
-        default = 5 , 
+        default = 60 , 
         help = "Min interval between calculating eval metrics, and sav eval summaries "
     )
     group.add_argument(
         '--min-train-eval-rate' ,
         type = int ,
-        default = 20 ,
+        default = 60 ,
         help="Minimal train/eval ratio on master "
     )
     
     return group
+
+def tests( args ):
+    with tf.Graph().as_default():
+        
+        train_input_fn = dm.make_input_fn(
+            args.train_data_path  ,
+            dm.parse_examples ,
+            args.batch_size ,
+            num_epochs = args.num_epochs
+        )
+
+        inputs , labels = train_input_fn()
+        #fake graph
+        print( inputs.shape )
+        ss = inputs +1 
+        print( " grapho oi yea ")
+        
+        init_op = tf.group(tf.global_variables_initializer(),
+                       tf.local_variables_initializer())
+    
+        sess = tf.Session()
+        sess.run( init_op  )
+        
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        print(threads)
+        n = 0
+        
+        print("ruuuu ")
+        while not coord.should_stop():
+            print( sess.run(  ss  ).shape )
+            print( sess.run( labels  ).shape )
+            print("train   " + str(n))
+            n = n +1 
+            
+        coord.request_stop()
+        coord.join(threads) 
+        
+        sess.close()
+    
+    
+    
 if __name__ == "__main__":
     tf_config = tf.ConfigProto()
     tf_config.gpu_options.per_process_gpu_memory_fraction = 0.45
 
+    #os.environ["CUDA_VISIBLE_DEVICES"] = ""
     
     parser = argparse.ArgumentParser()
 
@@ -181,5 +240,20 @@ if __name__ == "__main__":
     training_arguments(parser )
     
     run_train(  parser.parse_args() )
+    
+    #tests( parser.parse_args() )
+
+    """
+    param_stats = model_analyzer.print_model_analysis(
+    tf.get_default_graph(),
+    tfprof_options=tf.contrib.tfprof.model_analyzer.TRAINABLE_VARS_PARAMS_STAT_OPTIONS)
+
+    sys.stdout.write('total_params: %d\n' % param_stats.total_parameters)
+
+    tf.contrib.tfprof.model_analyzer.print_model_analysis(
+        tf.get_default_graph(),
+        tfprof_options=tf.contrib.tfprof.model_analyzer.FLOAT_OPS_OPTIONS)
+    """
+
     
     print("train")
